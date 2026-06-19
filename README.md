@@ -1,217 +1,194 @@
-const { spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const kill = require('tree-kill');
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title><%= bot.name %> — Draw Bot</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/public/logo.ico">
+<link rel="stylesheet" href="/public/css/style.css">
+</head>
+<body>
+<div id="page-loader">
+  <div class="loader-logo">
+    <img src="/public/logo.ico" alt="Draw Bot">
+    <div class="loader-ring"></div>
+    <div class="loader-ring2"></div>
+  </div>
+  <div class="loader-bar-wrap"><div class="loader-bar" id="lbar"></div></div>
+  <div class="loader-text">تحميل بيانات البوت...</div>
+</div>
 
-// runtime registry: botId -> { proc, status, startedAt, wantStop, restartHistory, timer }
-const running = new Map();
+<nav class="nav">
+  <a class="brand" href="/dashboard">
+    <img src="/public/logo.ico" class="brand-logo" alt="logo">
+    <span class="brand-name">DRAW BOT</span>
+  </a>
+  <div class="nav-right">
+    <a class="btn btn-ghost btn-sm" href="/dashboard">← لوحة التحكم</a>
+  </div>
+</nav>
 
-const BOTS_DIR = path.join(__dirname, 'bots');
-const MAX_RESTARTS_PER_HOUR = 20; // safety brake against infinite crash loops
+<div class="page">
+  <!-- Bot Header -->
+  <div class="bot-header">
+    <div>
+      <h1><%= bot.name %></h1>
+      <div class="tags">
+        <span class="tag mono"><%= bot.language === 'python' ? '🐍 Python' : '🟢 Node.js' %></span>
+        <span class="tag alt mono">entry: <%= bot.entryFile %></span>
+        <span class="tag live">⏱ تشغيل دائم 24/7</span>
+        <div class="status <%= bot.liveStatus %>" style="margin-right:6px;">
+          <span class="dot"></span>
+          <span id="statusLabel">
+            <%= bot.liveStatus === 'running' ? 'يعمل' : bot.liveStatus === 'starting' ? 'يبدأ...' : bot.liveStatus === 'restarting' ? 'إعادة تشغيل' : bot.liveStatus === 'crashed' ? 'تعطّل' : 'متوقف' %>
+          </span>
+        </div>
+      </div>
+    </div>
+    <div class="ctrl-row">
+      <form method="POST" action="/bots/<%= bot.id %>/start">
+        <button class="btn btn-success" <%= (!bot.uploaded || bot.liveStatus==='running' || bot.liveStatus==='starting' || bot.liveStatus==='restarting') ? 'disabled' : '' %>>▶ تشغيل</button>
+      </form>
+      <form method="POST" action="/bots/<%= bot.id %>/restart">
+        <button class="btn btn-ghost" <%= !bot.uploaded ? 'disabled':'' %>>↻ إعادة تشغيل</button>
+      </form>
+      <form method="POST" action="/bots/<%= bot.id %>/stop">
+        <button class="btn btn-danger" <%= (bot.liveStatus!=='running' && bot.liveStatus!=='restarting') ? 'disabled':'' %>>■ إيقاف</button>
+      </form>
+      <form method="POST" action="/bots/<%= bot.id %>/delete" onsubmit="return confirm('هل تريد حذف هذا البوت نهائياً؟')">
+        <button class="btn btn-ghost">🗑</button>
+      </form>
+    </div>
+  </div>
 
-function botDir(botId) {
-  return path.join(BOTS_DIR, botId);
-}
+  <!-- Stats Row -->
+  <div class="stats-row" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px;">
+    <div class="stat-card fade-in fade-in-1">
+      <div class="s-label">📊 الحالة</div>
+      <div class="s-value" id="statusVal" style="font-size:18px;"><%= bot.liveStatus === 'running' ? '🟢 يعمل' : bot.liveStatus === 'crashed' ? '🔴 تعطّل' : '⚫ متوقف' %></div>
+    </div>
+    <div class="stat-card fade-in fade-in-2">
+      <div class="s-label">💻 اللغة</div>
+      <div class="s-value" style="font-size:18px;"><%= bot.language === 'python' ? '🐍 Python' : '🟢 Node.js' %></div>
+    </div>
+    <div class="stat-card fade-in fade-in-3">
+      <div class="s-label">📁 الكود</div>
+      <div class="s-value" style="font-size:18px;"><%= bot.uploaded ? '✅ جاهز' : '❌ غير مرفوع' %></div>
+    </div>
+    <div class="stat-card fade-in fade-in-4">
+      <div class="s-label">🔄 إعادة تشغيل تلقائي</div>
+      <div class="s-value" style="font-size:18px;">✅ مفعّل</div>
+    </div>
+  </div>
 
-function logFile(botId) {
-  return path.join(botDir(botId), 'run.log');
-}
+  <div class="grid-2">
+    <div style="display:flex;flex-direction:column;gap:20px;">
 
-function appendLog(botId, line) {
+      <!-- Code Panel -->
+      <div class="panel fade-in fade-in-1">
+        <h3>كود البوت</h3>
+        <div class="tabs">
+          <button type="button" class="tab-btn active" data-tab="editor" onclick="switchTab('editor')">✏️ كتابة/لصق</button>
+          <button type="button" class="tab-btn" data-tab="zip" onclick="switchTab('zip')">📦 رفع ZIP</button>
+        </div>
+
+        <div id="tab-editor" class="tab-pane active">
+          <form method="POST" action="/bots/<%= bot.id %>/save-code" id="codeForm">
+            <div class="field">
+              <label>محتوى <span class="mono"><%= bot.entryFile %></span></label>
+              <textarea name="code" id="codeArea" class="code-area" placeholder="الصق كود البوت هنا..."></textarea>
+            </div>
+            <div class="field">
+              <label><%= bot.language === 'python' ? 'requirements.txt (اختياري)' : 'package.json (اختياري)' %></label>
+              <textarea name="deps" id="depsArea" class="code-area small" placeholder="<%= bot.language === 'python' ? 'pyTelegramBotAPI==4.16.1' : '{\n  \"dependencies\": {}\n}' %>"></textarea>
+            </div>
+            <button class="btn btn-primary btn-block" type="submit">💾 حفظ ونشر الكود</button>
+          </form>
+        </div>
+
+        <div id="tab-zip" class="tab-pane">
+          <form method="POST" action="/bots/<%= bot.id %>/upload" enctype="multipart/form-data">
+            <div class="upload-box">
+              <div style="font-size:28px;margin-bottom:10px;">📦</div>
+              <div>اسحب ملف ZIP أو اضغط للاختيار</div>
+              <div style="font-size:12px;color:var(--text-2);margin-top:6px;">يجب أن يحتوي على <span class="mono"><%= bot.entryFile %></span></div>
+              <input type="file" name="botzip" accept=".zip" required>
+            </div>
+            <button class="btn btn-primary btn-block" type="submit">رفع ونشر</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Info Panel -->
+      <div class="panel fade-in fade-in-2">
+        <h3>معلومات البوت</h3>
+        <div class="kv"><span>الحالة الحالية</span><span class="status <%= bot.liveStatus %>" id="kvStatus"><span class="dot"></span><%= bot.liveStatus === 'running' ? 'يعمل' : bot.liveStatus === 'crashed' ? 'تعطّل' : 'متوقف' %></span></div>
+        <div class="kv"><span>اللغة</span><span><%= bot.language === 'python' ? '🐍 Python' : '🟢 Node.js' %></span></div>
+        <div class="kv"><span>ملف التشغيل</span><span class="mono"><%= bot.entryFile %></span></div>
+        <div class="kv"><span>الكود مرفوع</span><span><%= bot.uploaded ? '✅ نعم' : '❌ لا' %></span></div>
+        <div class="kv"><span>إعادة التشغيل التلقائي</span><span style="color:var(--green)">✅ مفعّل</span></div>
+        <div class="kv"><span>تاريخ الإنشاء</span><span><%= new Date(bot.createdAt).toLocaleString('ar-EG') %></span></div>
+      </div>
+    </div>
+
+    <!-- Console Panel -->
+    <div class="panel fade-in fade-in-2">
+      <h3 style="justify-content:space-between;">
+        <span style="display:flex;align-items:center;gap:8px;">
+          <span style="width:3px;height:18px;border-radius:3px;background:linear-gradient(var(--blue),var(--cyan));display:block;"></span>
+          الكونسول (Logs)
+        </span>
+        <span style="font-size:12px;color:var(--text-2);font-weight:500;">تحديث تلقائي</span>
+      </h3>
+      <div class="logs-wrap">
+        <div class="logs-box" id="logsBox"><%= logs || 'لا توجد سجلات بعد...' %></div>
+        <div class="console-anim"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <img src="/public/logo.ico" alt="">
+  Draw Bot © 2026
+</footer>
+
+<script>
+const botId = "<%= bot.id %>";
+const logsBox = document.getElementById('logsBox');
+
+async function refreshLogs() {
   try {
-    const stamp = new Date().toLocaleTimeString('en-GB');
-    fs.appendFileSync(logFile(botId), `[${stamp}] ${line}\n`);
-  } catch (e) {
-    // ignore
-  }
+    const res = await fetch('/bots/' + botId + '/logs');
+    const data = await res.json();
+    const atBottom = logsBox.scrollTop + logsBox.clientHeight >= logsBox.scrollHeight - 30;
+    logsBox.textContent = data.logs || 'لا توجد سجلات بعد...';
+    if (atBottom) logsBox.scrollTop = logsBox.scrollHeight;
+  } catch(e) {}
 }
+logsBox.scrollTop = logsBox.scrollHeight;
+setInterval(refreshLogs, 2500);
 
-function getStatus(botId) {
-  const entry = running.get(botId);
-  return entry ? entry.status : 'stopped';
-}
-
-function getEntry(botId) {
-  return running.get(botId);
-}
-
-function readLogs(botId, lines = 300) {
-  const file = logFile(botId);
-  if (!fs.existsSync(file)) return '';
-  const content = fs.readFileSync(file, 'utf8');
-  const all = content.split('\n');
-  return all.slice(Math.max(0, all.length - lines)).join('\n');
-}
-
-function clearLogs(botId) {
+async function loadCode() {
   try {
-    fs.writeFileSync(logFile(botId), '');
-  } catch (e) {}
+    const res = await fetch('/bots/' + botId + '/code');
+    const data = await res.json();
+    if (data.code) document.getElementById('codeArea').value = data.code;
+    if (data.deps) document.getElementById('depsArea').value = data.deps;
+  } catch(e) {}
+}
+loadCode();
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.id === 'tab-' + tab));
 }
 
-// ---------- language detection ----------
-function detectLanguage(dir, entryFile) {
-  const ext = path.extname(entryFile).toLowerCase();
-  if (ext === '.py') return 'python';
-  if (ext === '.js' || ext === '.mjs' || ext === '.cjs') return 'node';
-  if (fs.existsSync(path.join(dir, 'requirements.txt'))) return 'python';
-  if (fs.existsSync(path.join(dir, 'package.json'))) return 'node';
-  return 'node';
-}
-
-function pythonCmd() {
-  return process.platform === 'win32' ? 'python' : 'python3';
-}
-
-function installDeps(botId, dir, language, cb) {
-  if (language === 'python') {
-    const reqPath = path.join(dir, 'requirements.txt');
-    if (!fs.existsSync(reqPath)) return cb(null);
-    appendLog(botId, '⏳ تثبيت مكتبات Python (pip install -r requirements.txt)...');
-    const install = spawn(pythonCmd(), ['-m', 'pip', 'install', '--no-cache-dir', '--disable-pip-version-check', '-r', 'requirements.txt'], {
-      cwd: dir,
-      shell: true
-    });
-    let stderrBuf = '';
-    install.stdout.on('data', (d) => appendLog(botId, d.toString().trim()));
-    install.stderr.on('data', (d) => { const s = d.toString(); stderrBuf += s; appendLog(botId, s.trim()); });
-    install.on('close', (code) => {
-      if (code === 0) {
-        appendLog(botId, '✅ تم تثبيت مكتبات Python بنجاح');
-        return cb(null);
-      }
-      if (stderrBuf.includes('t64.exe') || stderrBuf.includes('distlib')) {
-        appendLog(botId, '🛠️ هذا خطأ معروف في تثبيت pip على Windows (مش بسبب البوت أو الموقع). الحل: شغّل في الـ terminal: python -m pip install --upgrade --force-reinstall pip ثم أعد المحاولة.');
-        appendLog(botId, '💡 الأفضل والأضمن: نشر هذا المشروع على Railway (لينكس) بدل تشغيله محلياً على Windows — هذا الخطأ غير موجود على لينكس، وبيكون تشغيل البوت 24/7 فعلي وحقيقي.');
-      }
-      appendLog(botId, '❌ فشل تثبيت مكتبات Python (كود ' + code + ')');
-      cb(new Error('pip install failed'));
-    });
-    return;
-  }
-
-  if (!fs.existsSync(path.join(dir, 'package.json'))) return cb(null);
-  appendLog(botId, '⏳ تثبيت المكتبات (npm install)...');
-  const install = spawn('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], {
-    cwd: dir,
-    shell: true
-  });
-  install.stdout.on('data', (d) => appendLog(botId, d.toString().trim()));
-  install.stderr.on('data', (d) => appendLog(botId, d.toString().trim()));
-  install.on('close', (code) => {
-    if (code === 0) {
-      appendLog(botId, '✅ تم تثبيت المكتبات بنجاح');
-      cb(null);
-    } else {
-      appendLog(botId, '❌ فشل تثبيت المكتبات (كود ' + code + ')');
-      cb(new Error('npm install failed'));
-    }
-  });
-}
-
-// core spawn routine, called on first start AND on every auto-restart
-function spawnProcess(botId, entryFile, language, dir, onChange) {
-  appendLog(botId, '🚀 تشغيل البوت...');
-  const cmd = language === 'python' ? pythonCmd() : 'node';
-  const proc = spawn(cmd, [entryFile], {
-    cwd: dir,
-    env: { ...process.env, PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
-    shell: false
-  });
-
-  const prev = running.get(botId) || {};
-  running.set(botId, { ...prev, proc, status: 'running', startedAt: Date.now(), wantStop: false });
-  if (onChange) onChange('running');
-
-  proc.stdout.on('data', (d) => appendLog(botId, d.toString().trimEnd()));
-  proc.stderr.on('data', (d) => appendLog(botId, '⚠️ ' + d.toString().trimEnd()));
-
-  proc.on('exit', (code, signal) => {
-    const entry = running.get(botId) || {};
-    const manualStop = entry.wantStop === true;
-    appendLog(botId, `⛔ توقف البوت (code: ${code}, signal: ${signal})`);
-
-    if (manualStop) {
-      running.set(botId, { ...entry, proc: null, status: 'stopped' });
-      if (onChange) onChange('stopped');
-      return;
-    }
-
-    const now = Date.now();
-    const hourAgo = now - 60 * 60 * 1000;
-    const history = (entry.restartHistory || []).filter((t) => t > hourAgo);
-
-    if (history.length >= MAX_RESTARTS_PER_HOUR) {
-      appendLog(botId, '🧯 تم تجاوز الحد الأقصى لإعادة التشغيل التلقائي (20/ساعة). افحص السجلات وأعد التشغيل يدوياً.');
-      running.set(botId, { ...entry, proc: null, status: 'crashed', restartHistory: history });
-      if (onChange) onChange('crashed');
-      return;
-    }
-
-    running.set(botId, { ...entry, proc: null, status: 'restarting', restartHistory: [...history, now] });
-    if (onChange) onChange('restarting');
-    appendLog(botId, '♻️ إعادة تشغيل تلقائية بعد 3 ثواني (وضع 24/7)...');
-
-    const timer = setTimeout(() => {
-      const e2 = running.get(botId);
-      if (!e2 || e2.wantStop) return;
-      spawnProcess(botId, entryFile, language, dir, onChange);
-    }, 3000);
-
-    running.set(botId, { ...running.get(botId), timer });
-  });
-}
-
-function startBot(botId, entryFile, onChange) {
-  const current = running.get(botId);
-  if (current && (current.status === 'running' || current.status === 'starting')) {
-    return { ok: false, message: 'البوت يعمل بالفعل' };
-  }
-
-  const dir = botDir(botId);
-  if (!fs.existsSync(dir)) {
-    return { ok: false, message: 'مجلد البوت غير موجود' };
-  }
-
-  const language = detectLanguage(dir, entryFile);
-  running.set(botId, { proc: null, status: 'starting', startedAt: Date.now(), wantStop: false, restartHistory: [] });
-  if (onChange) onChange('starting');
-
-  installDeps(botId, dir, language, (err) => {
-    if (err) {
-      running.set(botId, { ...running.get(botId), proc: null, status: 'crashed' });
-      if (onChange) onChange('crashed');
-      return;
-    }
-    spawnProcess(botId, entryFile, language, dir, onChange);
-  });
-
-  return { ok: true, language };
-}
-
-function stopBot(botId, cb) {
-  const entry = running.get(botId);
-  if (!entry || !entry.proc) {
-    if (entry && entry.timer) clearTimeout(entry.timer);
-    running.set(botId, { proc: null, status: 'stopped', startedAt: Date.now(), wantStop: true });
-    return cb && cb(null);
-  }
-  running.set(botId, { ...entry, status: 'stopping', wantStop: true });
-  appendLog(botId, '🛑 إيقاف البوت...');
-  kill(entry.proc.pid, 'SIGTERM', (err) => {
-    cb && cb(err);
-  });
-}
-
-module.exports = {
-  startBot,
-  stopBot,
-  getStatus,
-  getEntry,
-  readLogs,
-  clearLogs,
-  appendLog,
-  botDir,
-  detectLanguage,
-  BOTS_DIR
-};
+// Loader
+const bar=document.getElementById('lbar');const loader=document.getElementById('page-loader');let w=0;
+const iv=setInterval(()=>{w=Math.min(w+Math.random()*18+5,92);bar.style.width=w+'%';},120);
+window.addEventListener('load',()=>{clearInterval(iv);bar.style.width='100%';setTimeout(()=>loader.classList.add('done'),400);});
+setTimeout(()=>loader.classList.add('done'),2500);
+</script>
+</body>
+</html>
